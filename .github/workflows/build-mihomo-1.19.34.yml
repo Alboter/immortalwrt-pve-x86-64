@@ -9,48 +9,90 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
 
     steps:
       - name: Checkout workflow repository
         uses: actions/checkout@v4
 
-      - name: Checkout official Nikki package feed
+      - name: Checkout official Nikki feed
         uses: actions/checkout@v4
         with:
           repository: nikkinikki-org/OpenWrt-nikki
           ref: main
           path: OpenWrt-nikki
 
-      - name: Verify build configuration
+      - name: Verify Nikki Makefile
         run: |
           set -euo pipefail
-          MAKEFILE="OpenWrt-nikki/mihomo-meta/Makefile"
-          grep -qx 'PKG_VERSION:=1.19.34' "$MAKEFILE"
-          grep -qx 'PKG_SOURCE_VERSION:=v1.19.34' "$MAKEFILE"
-          grep -qx 'GO_PKG_TAGS:=with_gvisor' "$MAKEFILE"
-          echo "Verified Mihomo 1.19.34 with with_gvisor"
+          FILE="OpenWrt-nikki/mihomo-meta/Makefile"
+          grep -qx 'PKG_VERSION:=1.19.34' "$FILE"
+          grep -qx 'PKG_SOURCE_VERSION:=v1.19.34' "$FILE"
+          grep -qx 'GO_PKG_TAGS:=with_gvisor' "$FILE"
+          echo "Mihomo 1.19.34 with_gvisor verified"
 
-      - name: Build package
-        uses: immortalwrt/gh-action-sdk@master
-        env:
-          ARCH: x86_64-25.12.2
-          FEEDNAME: nikki
-          FEED_DIR: ${{ github.workspace }}/OpenWrt-nikki
-          PACKAGES: mihomo-meta
-          INDEX: 1
-          NO_REFRESH_CHECK: true
-
-      - name: Verify APK
+      - name: Download ImmortalWrt SDK
         run: |
           set -euo pipefail
-          find bin/packages -type f -name 'mihomo-meta-*.apk' -print
-          test -n "$(find bin/packages -type f -name 'mihomo-meta-*.apk' -print -quit)"
+
+          FILE="immortalwrt-sdk-25.12.2-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+          URL="https://downloads.immortalwrt.org/releases/25.12.2/targets/x86/64/$FILE"
+          HASH="4d4631f134c2f27215a91aa7ef5bf9a01ea96c2450d3b8a5c38048c32462ac60"
+
+          curl -fL --retry 3 "$URL" -o "$RUNNER_TEMP/$FILE"
+          echo "$HASH  $RUNNER_TEMP/$FILE" | sha256sum -c -
+
+          mkdir -p "$RUNNER_TEMP/sdk"
+          tar --zstd -xf "$RUNNER_TEMP/$FILE" -C "$RUNNER_TEMP/sdk"
+
+          SDK_DIR="$(find "$RUNNER_TEMP/sdk" -type f -path '*/scripts/feeds' -print -quit | sed 's#/scripts/feeds$##')"
+          test -n "$SDK_DIR"
+          echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
+
+      - name: Install Nikki feed
+        run: |
+          set -euo pipefail
+          cd "$SDK_DIR"
+
+          echo "src-link nikki $GITHUB_WORKSPACE/OpenWrt-nikki" >> feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -p nikki mihomo-meta
+
+      - name: Compile Mihomo
+        run: |
+          set -euo pipefail
+          cd "$SDK_DIR"
+          make defconfig
+          make package/mihomo-meta/compile V=s -j"$(nproc)"
+
+      - name: Verify and collect APK
+        run: |
+          set -euo pipefail
+
+          mapfile -t APKS < <(find "$SDK_DIR/bin/packages" -type f -name 'mihomo-meta*.apk')
+
+          if [ "${#APKS[@]}" -ne 1 ]; then
+            echo "Expected one APK, found ${#APKS[@]}"
+            find "$SDK_DIR/bin/packages" -type f
+            exit 1
+          fi
+
+          APK="${APKS[0]}"
+          tar -xOf "$APK" .PKGINFO > "$RUNNER_TEMP/PKGINFO"
+
+          grep -Eq '^pkgname = mihomo-meta$' "$RUNNER_TEMP/PKGINFO"
+          grep -Eq '^pkgver = 1\.19\.34-r[0-9]+$' "$RUNNER_TEMP/PKGINFO"
+          grep -Eq '^arch = x86_64$' "$RUNNER_TEMP/PKGINFO"
+
+          mkdir -p output
+          cp "$APK" output/
+          sha256sum output/*.apk > output/SHA256SUMS.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: mihomo-meta-1.19.34-x86_64-openwrt-25.12
-          path: bin/packages/x86_64/nikki/mihomo-meta-*.apk
+          name: mihomo-meta-1.19.34-x86_64-25.12.2-with-gvisor
+          path: output/*
           if-no-files-found: error
           retention-days: 14
