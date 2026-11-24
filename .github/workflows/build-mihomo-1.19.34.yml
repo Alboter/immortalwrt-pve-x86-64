@@ -1,0 +1,56 @@
+
+name: Build Mihomo Meta 1.19.34 with gVisor
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+
+      - name: Checkout official Nikki package feed
+        uses: actions/checkout@v4
+        with:
+          repository: nikkinikki-org/OpenWrt-nikki
+          ref: main
+          path: OpenWrt-nikki
+
+      - name: Verify build configuration
+        run: |
+          set -euo pipefail
+          MAKEFILE="OpenWrt-nikki/mihomo-meta/Makefile"
+          grep -qx 'PKG_VERSION:=1.19.34' "$MAKEFILE"
+          grep -qx 'PKG_SOURCE_VERSION:=v1.19.34' "$MAKEFILE"
+          grep -qx 'GO_PKG_TAGS:=with_gvisor' "$MAKEFILE"
+          echo "Verified Mihomo 1.19.34 with with_gvisor"
+
+      - name: Build package
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: x86_64-openwrt-25.12
+          FEEDNAME: nikki
+          FEED_DIR: ${{ github.workspace }}/OpenWrt-nikki
+          PACKAGES: mihomo-meta
+          INDEX: 1
+          NO_REFRESH_CHECK: true
+
+      - name: Verify APK
+        run: |
+          set -euo pipefail
+          find bin/packages -type f -name 'mihomo-meta-*.apk' -print
+          test -n "$(find bin/packages -type f -name 'mihomo-meta-*.apk' -print -quit)"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mihomo-meta-1.19.34-x86_64-openwrt-25.12
+          path: bin/packages/x86_64/nikki/mihomo-meta-*.apk
+          if-no-files-found: error
+          retention-days: 14
