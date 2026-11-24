@@ -32,9 +32,9 @@ jobs:
           echo "Verified Mihomo 1.19.34 with with_gvisor"
 
       - name: Build package
-        uses: openwrt/gh-action-sdk@main
+        uses: immortalwrt/gh-action-sdk@master
         env:
-          ARCH: x86_64-openwrt-25.12
+          ARCH: x86_64-25.12.2
           FEEDNAME: nikki
           FEED_DIR: ${{ github.workspace }}/OpenWrt-nikki
           PACKAGES: mihomo-meta
